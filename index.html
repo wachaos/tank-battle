@@ -146,114 +146,119 @@
   const canvas = document.getElementById('game');
   const ctx = canvas.getContext('2d');
 
-  // Canvas size
   const COLS = 26;
   const ROWS = 26;
   const CELL = 24;
   canvas.width = COLS * CELL;
   canvas.height = ROWS * CELL;
 
-  // DOM elements
-  const scoreDisplay = document.getElementById('scoreDisplay');
-  const levelDisplay = document.getElementById('levelDisplay');
-  const killsDisplay = document.getElementById('killsDisplay');
-  const livesDisplay = document.getElementById('livesDisplay');
-  const menuOverlay = document.getElementById('menuOverlay');
-  const gameoverOverlay = document.getElementById('gameoverOverlay');
-  const victoryOverlay = document.getElementById('victoryOverlay');
-  const pauseOverlay = document.getElementById('pauseOverlay');
-  const gameoverTitle = document.getElementById('gameoverTitle');
-  const finalScore = document.getElementById('finalScore');
-  const victoryScore = document.getElementById('victoryScore');
+  // DOM refs
+  const $ = id => document.getElementById(id);
+  const scoreDisplay = $('scoreDisplay');
+  const levelDisplay = $('levelDisplay');
+  const killsDisplay = $('killsDisplay');
+  const livesDisplay = $('livesDisplay');
 
-  // Audio context
+  // Audio
   let audioCtx = null;
   function initAudio() {
-    if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    if (!audioCtx) {
+      audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    }
   }
-  function playSound(freq, type, duration, vol = 0.1) {
+  function playSound(freq, type, duration, vol) {
     if (!audioCtx) return;
-    const osc = audioCtx.createOscillator();
-    const gain = audioCtx.createGain();
-    osc.type = type;
-    osc.frequency.setValueAtTime(freq, audioCtx.currentTime);
-    gain.gain.setValueAtTime(vol, audioCtx.currentTime);
-    gain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + duration);
-    osc.connect(gain);
-    gain.connect(audioCtx.destination);
-    osc.start(audioCtx.currentTime);
-    osc.stop(audioCtx.currentTime + duration);
+    try {
+      const osc = audioCtx.createOscillator();
+      const gain = audioCtx.createGain();
+      osc.type = type;
+      osc.frequency.setValueAtTime(freq, audioCtx.currentTime);
+      gain.gain.setValueAtTime(vol, audioCtx.currentTime);
+      gain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + duration);
+      osc.connect(gain);
+      gain.connect(audioCtx.destination);
+      osc.start(audioCtx.currentTime);
+      osc.stop(audioCtx.currentTime + duration);
+    } catch(e) {}
   }
   function sfxShoot() { playSound(200, 'square', 0.1, 0.08); }
   function sfxHit() { playSound(80, 'sawtooth', 0.15, 0.05); }
-  function sfxExplosion() { playSound(40, 'sawtooth', 0.3, 0.08); }
-  function sfxPowerUp() { playSound(600, 'square', 0.15, 0.05); playSound(800, 'square', 0.15, 0.05); }
-  function sfxGameOver() { playSound(60, 'sawtooth', 0.5, 0.1); }
+  function sfxExplosion() { playSound(40, 'sawtooth', 0.25, 0.08); }
+  function sfxPowerUp() {
+    playSound(600, 'square', 0.12, 0.05);
+    playSound(800, 'square', 0.12, 0.05);
+  }
+  function sfxGameOver() { playSound(60, 'sawtooth', 0.4, 0.12); }
 
   // Game state
   const STATE = { MENU: 0, PLAYING: 1, PAUSED: 2, GAMEOVER: 3, VICTORY: 4 };
   let gameState = STATE.MENU;
-  let score = 0;
-  let lives = 3;
-  let level = 1;
-  let kills = 0;
+  let score = 0, lives = 3, level = 1, kills = 0;
   let player = null;
-  let enemies = [];
-  let bullets = [];
-  let walls = [];
-  let powerUps = [];
-  let enemySpawnTimer = 0;
-  let enemySpawnInterval = 180;
-  let enemiesRemaining = 0;
-  let totalEnemiesThisLevel = 0;
-  let particles = [];
+  let enemies = [], bullets = [], walls = [], powerUps = [], particles = [];
+  let enemySpawnTimer = 0, enemySpawnInterval = 180;
+  let enemiesRemaining = 0, totalEnemiesThisLevel = 0;
   let basePos = null;
+  let respawnTimer = 0;        // frames until respawn (0 = alive / no respawn in progress)
+  let playerInvincible = 0;    // invincibility frames after respawn
 
   // Input
   const keys = {};
   document.addEventListener('keydown', e => {
-    keys[e.key.toLowerCase()] = true;
-    if (e.key.toLowerCase() === 'p' && gameState === STATE.PLAYING) {
-      gameState = STATE.PAUSED;
-      pauseOverlay.classList.remove('hidden');
-    } else if (e.key.toLowerCase() === 'p' && gameState === STATE.PAUSED) {
-      gameState = STATE.PLAYING;
-      pauseOverlay.classList.add('hidden');
+    const k = e.key.toLowerCase();
+    keys[k] = true;
+
+    if (k === 'p') {
+      if (gameState === STATE.PLAYING) {
+        gameState = STATE.PAUSED;
+        $('pauseOverlay').classList.remove('hidden');
+      } else if (gameState === STATE.PAUSED) {
+        gameState = STATE.PLAYING;
+        $('pauseOverlay').classList.add('hidden');
+      }
     }
-    if (e.key === ' ' || e.key.toLowerCase() === 'j') {
+    if (e.key === ' ' || k === 'j') {
       e.preventDefault();
-      if (gameState === STATE.PLAYING && player) player.shoot();
-    }
-    if (e.key.toLowerCase() === 'enter' && gameState === STATE.MENU) {
-      startGame();
+      if (gameState === STATE.PLAYING && player && player.alive && respawnTimer <= 0) {
+        player.shoot();
+      }
     }
   });
-  document.addEventListener('keyup', e => { keys[e.key.toLowerCase()] = false; });
+  document.addEventListener('keyup', e => {
+    keys[e.key.toLowerCase()] = false;
+  });
 
-  // Helpers
+  // ---- helpers ----
   function cellX(col) { return col * CELL + CELL / 2; }
   function cellY(row) { return row * CELL + CELL / 2; }
-  function colFromX(x) { return Math.floor(x / CELL); }
-  function rowFromY(y) { return Math.floor(y / CELL); }
   function dist(a, b) { return Math.hypot(a.x - b.x, a.y - b.y); }
   function clamp(v, min, max) { return Math.max(min, Math.min(max, v)); }
 
-  // Particle
+  function rectsOverlap(a, b) {
+    return !(a.right <= b.left || a.left >= b.right ||
+             a.bottom <= b.top || a.top >= b.bottom);
+  }
+
+  function hasWallAt(px, py) {
+    for (const w of walls) {
+      const b = w.getBounds();
+      if (px >= b.left && px < b.right && py >= b.top && py < b.bottom) return true;
+    }
+    return false;
+  }
+
+  // ---- Particle ----
   class Particle {
-    constructor(x, y, color) {
+    constructor(x, y, color, vx, vy) {
       this.x = x; this.y = y;
-      this.vx = (Math.random() - 0.5) * 4;
-      this.vy = (Math.random() - 0.5) * 4;
+      this.vx = vx || (Math.random() - 0.5) * 4;
+      this.vy = vy || (Math.random() - 0.5) * 4;
       this.life = 1;
       this.decay = 0.02 + Math.random() * 0.04;
       this.color = color;
       this.size = 2 + Math.random() * 3;
     }
-    update() {
-      this.x += this.vx;
-      this.y += this.vy;
-      this.life -= this.decay;
-    }
+    update() { this.x += this.vx; this.y += this.vy; this.life -= this.decay; }
     draw(ctx) {
       ctx.globalAlpha = this.life;
       ctx.fillStyle = this.color;
@@ -262,11 +267,16 @@
     }
   }
 
-  // Tank base class
+  function spawnParticles(x, y, color, count) {
+    for (let i = 0; i < count; i++) {
+      particles.push(new Particle(x, y, color));
+    }
+  }
+
+  // ---- Tank ----
   class Tank {
     constructor(x, y, dir, color, speed) {
-      this.x = x;
-      this.y = y;
+      this.x = x; this.y = y;
       this.dir = dir; // 0:up 1:right 2:down 3:left
       this.color = color;
       this.speed = speed;
@@ -275,62 +285,109 @@
       this.cooldownTime = 30;
       this.alive = true;
       this.hp = 1;
+      // AI state
+      this.prevX = x;
+      this.prevY = y;
+      this.stuckFrames = 0;
     }
     getBounds() {
       return {
-        left: this.x - this.size,
-        right: this.x + this.size,
-        top: this.y - this.size,
-        bottom: this.y + this.size
+        left: this.x - this.size, right: this.x + this.size,
+        top: this.y - this.size, bottom: this.y + this.size
       };
     }
-    collidesWith(other) {
-      const b1 = this.getBounds();
-      const b2 = other.getBounds();
-      return !(b1.right < b2.left || b1.left > b2.right ||
-               b1.bottom < b2.top || b1.top > b2.bottom);
-    }
-    collidesWall() {
+
+    // Get walls this tank overlaps
+    overlappingWalls() {
+      const b = this.getBounds();
+      const result = [];
       for (const w of walls) {
-        if (this.collidesWith(w)) return w;
+        if (rectsOverlap(b, w.getBounds())) result.push(w);
       }
-      return null;
+      return result;
     }
+
+    // Push tank out of any overlapping walls. Returns true if any adjustment was made.
+    pushOutOfWalls() {
+      let changed = false;
+      for (let iter = 0; iter < 4; iter++) {
+        const ov = this.overlappingWalls();
+        if (ov.length === 0) break;
+        for (const w of ov) {
+          const wb = w.getBounds();
+          const b = this.getBounds();
+          // Find smallest overlap on each axis, push out on the axis with smaller overlap
+          const overlapLeft = b.right - wb.left;
+          const overlapRight = wb.right - b.left;
+          const overlapTop = b.bottom - wb.top;
+          const overlapBottom = wb.bottom - b.top;
+          const minX = Math.min(overlapLeft, overlapRight);
+          const minY = Math.min(overlapTop, overlapBottom);
+          if (minX < minY) {
+            if (overlapLeft < overlapRight) this.x = wb.left - this.size;
+            else this.x = wb.right + this.size;
+          } else {
+            if (overlapTop < overlapBottom) this.y = wb.top - this.size;
+            else this.y = wb.bottom + this.size;
+          }
+          changed = true;
+        }
+      }
+      return changed;
+    }
+
+    // Push out of base area
+    pushOutOfBase() {
+      if (!basePos) return;
+      const bb = { left: basePos.x - CELL/2, right: basePos.x + CELL/2,
+                   top: basePos.y - CELL/2, bottom: basePos.y + CELL/2 };
+      const tb = this.getBounds();
+      if (!rectsOverlap(tb, bb)) return;
+      const ol = tb.right - bb.left, or = bb.right - tb.left;
+      const ot = tb.bottom - bb.top, ob = bb.bottom - tb.top;
+      if (Math.min(ol, or) < Math.min(ot, ob)) {
+        if (ol < or) this.x = bb.left - this.size;
+        else this.x = bb.right + this.size;
+      } else {
+        if (ot < ob) this.y = bb.top - this.size;
+        else this.y = bb.bottom + this.size;
+      }
+    }
+
+    // Push out of other tanks
+    pushOutOfTanks(tanks) {
+      for (const t of tanks) {
+        if (t === this || !t.alive) continue;
+        const tb = this.getBounds(), ob = t.getBounds();
+        if (!rectsOverlap(tb, ob)) continue;
+        const ol = tb.right - ob.left, or = ob.right - tb.left;
+        const ot = tb.bottom - ob.top, ob2 = ob.bottom - tb.top;
+        if (Math.min(ol, or) < Math.min(ot, ob2)) {
+          if (ol < or) this.x = ob.left - this.size;
+          else this.x = ob.right + this.size;
+        } else {
+          if (ot < ob2) this.y = ob.top - this.size;
+          else this.y = ob.bottom + this.size;
+        }
+      }
+    }
+
     tryMove(dx, dy) {
+      if (dx === 0 && dy === 0) return false;
       this.x += dx;
       this.y += dy;
-      // Clamp to bounds
+      // Clamp to canvas
       this.x = clamp(this.x, this.size, canvas.width - this.size);
       this.y = clamp(this.y, this.size, canvas.height - this.size);
-      // Check wall collision
-      const wall = this.collidesWall();
-      if (wall) {
-        // Push out
-        if (dx !== 0) {
-          if (dx > 0) this.x = wall.getBounds().left - this.size;
-          else this.x = wall.getBounds().right + this.size;
-        }
-        if (dy !== 0) {
-          if (dy > 0) this.y = wall.getBounds().top - this.size;
-          else this.y = wall.getBounds().bottom + this.size;
-        }
-      }
-      // Check base collision
-      if (basePos && this.collidesWith({ getBounds: () => ({ left: basePos.x - CELL/2, right: basePos.x + CELL/2, top: basePos.y - CELL/2, bottom: basePos.y + CELL/2 }) })) {
-        this.x -= dx;
-        this.y -= dy;
-      }
-      // Check other tanks
-      const tanks = [...enemies];
-      if (player && player !== this) tanks.push(player);
-      for (const t of tanks) {
-        if (t !== this && t.alive && this.collidesWith(t)) {
-          this.x -= dx;
-          this.y -= dy;
-          break;
-        }
-      }
+      // Resolve overlaps
+      this.pushOutOfWalls();
+      this.pushOutOfBase();
+      const allTanks = [...enemies];
+      if (player && player !== this && player.alive) allTanks.push(player);
+      this.pushOutOfTanks(allTanks);
+      return true;
     }
+
     shoot() {
       if (this.cooldown > 0) return;
       let bx = this.x, by = this.y;
@@ -343,6 +400,7 @@
       this.cooldown = this.cooldownTime;
       sfxShoot();
     }
+
     draw(ctx) {
       ctx.save();
       ctx.translate(this.x, this.y);
@@ -354,17 +412,14 @@
       ctx.fillStyle = '#1a1a1a';
       ctx.fillRect(-this.size - 2, -this.size * 0.85, 4, this.size * 1.7);
       ctx.fillRect(this.size - 2, -this.size * 0.85, 4, this.size * 1.7);
-      // Tread marks
-      ctx.strokeStyle = '#333';
-      ctx.lineWidth = 1;
+      ctx.strokeStyle = '#444';
+      ctx.lineWidth = 0.5;
       for (let i = -3; i <= 3; i++) {
         const ty = i * this.size * 0.22;
         ctx.beginPath();
-        ctx.moveTo(-this.size - 2, ty); ctx.lineTo(-this.size + 2, ty);
-        ctx.stroke();
+        ctx.moveTo(-this.size - 2, ty); ctx.lineTo(-this.size + 2, ty); ctx.stroke();
         ctx.beginPath();
-        ctx.moveTo(this.size - 2, ty); ctx.lineTo(this.size + 2, ty);
-        ctx.stroke();
+        ctx.moveTo(this.size - 2, ty); ctx.lineTo(this.size + 2, ty); ctx.stroke();
       }
       // Barrel
       ctx.fillStyle = '#ccc';
@@ -372,59 +427,62 @@
       // Turret
       ctx.fillStyle = this.color;
       ctx.beginPath();
-      ctx.arc(0, 0, this.size * 0.55, 0, Math.PI * 2);
+      ctx.arc(0, 0, this.size * 0.5, 0, Math.PI * 2);
       ctx.fill();
-      ctx.strokeStyle = '#333';
+      ctx.strokeStyle = '#111';
       ctx.lineWidth = 1.5;
       ctx.stroke();
       ctx.restore();
     }
   }
 
-  // Bullet
+  // ---- Bullet ----
   class Bullet {
     constructor(x, y, dir, isPlayer) {
-      this.x = x;
-      this.y = y;
+      this.x = x; this.y = y;
       this.dir = dir;
       this.speed = 5;
       this.isPlayer = isPlayer;
       this.alive = true;
-      this.size = 3;
+      this.radius = 2.5;
     }
     update() {
       if (this.dir === 0) this.y -= this.speed;
       else if (this.dir === 1) this.x += this.speed;
       else if (this.dir === 2) this.y += this.speed;
       else this.x -= this.speed;
-      // Out of bounds
+
       if (this.x < 0 || this.x > canvas.width || this.y < 0 || this.y > canvas.height) {
-        this.alive = false;
+        this.alive = false; return;
       }
-      // Wall collision
+
+      // Wall hit
       for (const w of walls) {
-        const b = w.getBounds();
-        if (this.x >= b.left && this.x <= b.right && this.y >= b.top && this.y <= b.bottom) {
+        const wb = w.getBounds();
+        if (this.x >= wb.left && this.x <= wb.right &&
+            this.y >= wb.top && this.y <= wb.bottom) {
           this.alive = false;
           if (w.destructible) {
             w.hp--;
-            spawnParticles(w.x, w.y, '#b8860b', 5);
+            spawnParticles(w.x, w.y, '#b8860b', 4);
             sfxHit();
             if (w.hp <= 0) walls.splice(walls.indexOf(w), 1);
           } else {
-            spawnParticles(this.x, this.y, '#888', 3);
+            spawnParticles(this.x, this.y, '#aaa', 2);
           }
           return;
         }
       }
-      // Base collision
+
+      // Base hit
       if (basePos) {
-        const b = { left: basePos.x - CELL/2 + 4, right: basePos.x + CELL/2 - 4, top: basePos.y - CELL/2 + 4, bottom: basePos.y + CELL/2 - 4 };
-        if (this.x >= b.left && this.x <= b.right && this.y >= b.top && this.y <= b.bottom) {
+        const bb = { left: basePos.x - CELL/2 + 3, right: basePos.x + CELL/2 - 3,
+                     top: basePos.y - CELL/2 + 3, bottom: basePos.y + CELL/2 - 3 };
+        if (this.x >= bb.left && this.x <= bb.right &&
+            this.y >= bb.top && this.y <= bb.bottom) {
           this.alive = false;
           if (!this.isPlayer) {
-            // Enemy bullet hits base
-            spawnParticles(basePos.x, basePos.y, '#ff4444', 15);
+            spawnParticles(basePos.x, basePos.y, '#ff4444', 18);
             sfxExplosion();
             gameOver('基地被摧毁!');
           }
@@ -432,31 +490,23 @@
         }
       }
     }
-    getBounds() {
-      return {
-        left: this.x - this.size, right: this.x + this.size,
-        top: this.y - this.size, bottom: this.y + this.size
-      };
-    }
     draw(ctx) {
       ctx.fillStyle = this.isPlayer ? '#ffd93d' : '#ff6b6b';
       ctx.beginPath();
-      ctx.arc(this.x, this.y, this.size, 0, Math.PI * 2);
+      ctx.arc(this.x, this.y, this.radius, 0, Math.PI * 2);
       ctx.fill();
       ctx.fillStyle = '#fff';
       ctx.beginPath();
-      ctx.arc(this.x, this.y, this.size * 0.5, 0, Math.PI * 2);
+      ctx.arc(this.x, this.y, this.radius * 0.5, 0, Math.PI * 2);
       ctx.fill();
     }
   }
 
-  // Wall
+  // ---- Wall ----
   class Wall {
     constructor(col, row, destructible) {
-      this.x = cellX(col);
-      this.y = cellY(row);
-      this.col = col;
-      this.row = row;
+      this.x = cellX(col); this.y = cellY(row);
+      this.col = col; this.row = row;
       this.destructible = destructible;
       this.hp = destructible ? 2 : Infinity;
     }
@@ -467,55 +517,44 @@
       };
     }
     draw(ctx) {
-      ctx.fillStyle = this.destructible ? '#b8860b' : '#888';
-      ctx.fillRect(this.x - CELL / 2 + 1, this.y - CELL / 2 + 1, CELL - 2, CELL - 2);
       if (this.destructible) {
-        if (this.hp === 1) {
-          ctx.fillStyle = '#8b6914';
-          ctx.fillRect(this.x - CELL / 2 + 4, this.y - CELL / 2 + 4, CELL - 8, CELL - 8);
-        }
-        // Brick pattern
+        ctx.fillStyle = this.hp === 2 ? '#b8860b' : '#8b6914';
+        ctx.fillRect(this.x - CELL/2 + 1, this.y - CELL/2 + 1, CELL - 2, CELL - 2);
         ctx.strokeStyle = '#6b4e0a';
         ctx.lineWidth = 1;
-        ctx.strokeRect(this.x - CELL / 2 + 2, this.y - CELL / 2 + 2, CELL / 2 - 3, CELL / 2 - 3);
-        ctx.strokeRect(this.x, this.y, CELL / 2 - 3, CELL / 2 - 3);
+        ctx.strokeRect(this.x - CELL/2 + 4, this.y - CELL/2 + 3, CELL/2 - 4, CELL/2 - 4);
+        ctx.strokeRect(this.x + 1, this.y - CELL/2 + 3, CELL/2 - 4, CELL/2 - 4);
+        ctx.strokeRect(this.x - CELL/2 + 4, this.y + 2, CELL/2 - 4, CELL/2 - 4);
+        ctx.strokeRect(this.x + 1, this.y + 2, CELL/2 - 4, CELL/2 - 4);
       } else {
-        // Steel pattern
         ctx.fillStyle = '#666';
-        ctx.fillRect(this.x - CELL / 2 + 3, this.y - CELL / 2 + 3, CELL - 6, CELL - 6);
+        ctx.fillRect(this.x - CELL/2 + 1, this.y - CELL/2 + 1, CELL - 2, CELL - 2);
+        ctx.fillStyle = '#7a7a7a';
+        ctx.fillRect(this.x - CELL/2 + 4, this.y - CELL/2 + 4, CELL - 8, CELL - 8);
         ctx.strokeStyle = '#999';
         ctx.lineWidth = 1;
-        ctx.strokeRect(this.x - CELL / 2 + 4, this.y - CELL / 2 + 4, CELL - 8, CELL - 8);
+        ctx.strokeRect(this.x - CELL/2 + 5, this.y - CELL/2 + 5, CELL - 10, CELL - 10);
       }
-      // Subtle border
-      ctx.strokeStyle = 'rgba(0,0,0,0.5)';
-      ctx.lineWidth = 1;
-      ctx.strokeRect(this.x - CELL / 2, this.y - CELL / 2, CELL, CELL);
     }
   }
 
-  // PowerUp
+  // ---- PowerUp ----
   class PowerUp {
     constructor(x, y, type) {
-      this.x = x;
-      this.y = y;
-      this.type = type; // 'speed', 'rapid', 'shield', 'life'
-      this.timer = 600;
+      this.x = x; this.y = y;
+      this.type = type;
+      this.timer = 480;
       this.blink = 0;
     }
     getBounds() {
       return {
-        left: this.x - CELL / 3, right: this.x + CELL / 3,
-        top: this.y - CELL / 3, bottom: this.y + CELL / 3
+        left: this.x - CELL/3, right: this.x + CELL/3,
+        top: this.y - CELL/3, bottom: this.y + CELL/3
       };
     }
-    update() {
-      this.timer--;
-      this.blink = (this.blink + 1) % 30;
-      return this.timer > 0;
-    }
+    update() { this.timer--; this.blink = (this.blink + 1) % 30; return this.timer > 0; }
     draw(ctx) {
-      if (this.timer < 120 && this.blink > 15) return;
+      if (this.timer < 100 && this.blink > 15) return;
       const colors = { speed: '#00bfff', rapid: '#ff4500', shield: '#ffd700', life: '#00ff00' };
       ctx.fillStyle = colors[this.type] || '#fff';
       ctx.beginPath();
@@ -524,28 +563,21 @@
       ctx.strokeStyle = '#fff';
       ctx.lineWidth = 2;
       ctx.stroke();
-      // Icon
       ctx.fillStyle = '#000';
-      ctx.font = `${CELL * 0.45}px Arial`;
+      ctx.font = `${CELL * 0.4}px Arial`;
       ctx.textAlign = 'center';
       ctx.textBaseline = 'middle';
-      const icons = { speed: '⚡', rapid: '🔥', shield: '🛡', life: '❤' };
+      const icons = { speed: 'S', rapid: 'R', shield: 'D', life: '+' };
       ctx.fillText(icons[this.type] || '?', this.x, this.y + 1);
     }
   }
 
-  function spawnParticles(x, y, color, count) {
-    for (let i = 0; i < count; i++) {
-      particles.push(new Particle(x, y, color));
-    }
-  }
-
-  // Map generation
+  // ---- Map ----
   function generateMap() {
     walls = [];
     basePos = { x: cellX(COLS - 2), y: cellY(ROWS - 2) };
 
-    // Border walls (indestructible)
+    // Border
     for (let c = 0; c < COLS; c++) {
       walls.push(new Wall(c, 0, false));
       walls.push(new Wall(c, ROWS - 1, false));
@@ -555,79 +587,129 @@
       walls.push(new Wall(COLS - 1, r, false));
     }
 
-    // Base protection walls
-    walls.push(new Wall(COLS - 2, ROWS - 3, false));
-    walls.push(new Wall(COLS - 3, ROWS - 2, false));
-    walls.push(new Wall(COLS - 3, ROWS - 3, false));
-
-    // Keep center clear for spawn
-    const spawnClear = [
-      [1,1],[2,1],[1,2],  // top-left player area
-      [1,ROWS-2],[2,ROWS-2],[1,ROWS-3],  // bottom-left
-      [COLS-4,1],[COLS-3,1],[COLS-4,2],  // top-right enemy area
+    // Base defense
+    const baseWalls = [
+      [COLS-2, ROWS-3], [COLS-3, ROWS-2], [COLS-3, ROWS-3],
+      [COLS-4, ROWS-2], [COLS-2, ROWS-4], [COLS-4, ROWS-4],
+      [COLS-5, ROWS-3], [COLS-3, ROWS-5],
     ];
+    for (const [c, r] of baseWalls) {
+      walls.push(new Wall(c, r, Math.random() > 0.3 ? false : true));
+    }
 
-    function isSpawnClear(c, r) {
-      for (const s of spawnClear) {
-        if (s[0] === c && s[1] === r) return true;
-      }
+    // Safe zones (no walls)
+    function isSafe(c, r) {
+      // Player spawn area (top-left)
+      if (c <= 2 && r <= 2) return true;
+      if (c <= 2 && r >= ROWS - 3) return true;
+      // Enemy spawn area (top-right)
+      if (c >= COLS - 3 && r <= 2) return true;
+      // Base area
+      if (c >= COLS - 4 && r >= ROWS - 3) return true;
+      // Center lane keep somewhat open
+      if (Math.abs(c - COLS/2) < 2 && Math.abs(r - ROWS/2) < 2) return true;
       return false;
     }
 
-    function isBaseClear(c, r) {
-      const baseArea = [
-        [COLS-2,ROWS-2],[COLS-3,ROWS-2],[COLS-2,ROWS-3],
-        [COLS-4,ROWS-2],[COLS-2,ROWS-4]
-      ];
-      for (const b of baseArea) {
-        if (b[0] === c && b[1] === r) return true;
-      }
-      return false;
-    }
-
-    // Random walls
-    const density = 0.22 + level * 0.02;
+    const density = 0.18 + level * 0.03;
     for (let r = 1; r < ROWS - 1; r++) {
       for (let c = 1; c < COLS - 1; c++) {
-        if (isSpawnClear(c, r) || isBaseClear(c, r)) continue;
+        if (isSafe(c, r)) continue;
         if ((r + c) % 2 === 0 && Math.random() < density) {
-          const destructible = Math.random() < 0.65;
-          walls.push(new Wall(c, r, destructible));
+          walls.push(new Wall(c, r, Math.random() < 0.7));
         }
       }
     }
 
-    // Ensure some lanes exist - clear random cells near middle
-    const clearCount = 8 + Math.floor(Math.random() * 6);
-    for (let i = 0; i < clearCount; i++) {
-      const cr = 4 + Math.floor(Math.random() * (ROWS - 8));
-      const cc = 4 + Math.floor(Math.random() * (COLS - 8));
+    // Clear additional lanes to ensure pathfinding works
+    for (let i = 0; i < 6; i++) {
+      const r = 3 + Math.floor(Math.random() * (ROWS - 6));
+      const c = 3 + Math.floor(Math.random() * (COLS - 6));
       for (let w = walls.length - 1; w >= 0; w--) {
-        if (walls[w].col === cc && walls[w].row === cr && walls[w].destructible) {
+        if (walls[w].col === c && walls[w].row === r && walls[w].destructible) {
+          walls.splice(w, 1);
+        }
+      }
+      // Clear adjacent too for wider lanes
+      const dc = Math.random() > 0.5 ? 1 : 0;
+      const dr = dc ? 0 : 1;
+      for (let w = walls.length - 1; w >= 0; w--) {
+        if (walls[w].col === c + dc && walls[w].row === r + dr && walls[w].destructible) {
           walls.splice(w, 1);
         }
       }
     }
   }
 
+  // ---- Spawning ----
+  function isCellClear(c, r) {
+    const cx = cellX(c), cy = cellY(r);
+    // Walls
+    for (const w of walls) {
+      const wb = w.getBounds();
+      if (Math.abs(cx - w.x) < CELL && Math.abs(cy - w.y) < CELL) return false;
+    }
+    // Enemy tanks
+    for (const e of enemies) {
+      if (e.alive && dist({x: cx, y: cy}, e) < CELL * 2) return false;
+    }
+    // Player
+    if (player && player.alive && dist({x: cx, y: cy}, player) < CELL * 2) return false;
+    return true;
+  }
+
+  function spawnEnemy() {
+    if (enemiesRemaining <= 0) return false;
+    // Find a clear spawn position
+    const candidates = [];
+    for (let c = COLS - 3; c <= COLS - 2; c++) {
+      for (let r = 1; r <= 2; r++) {
+        if (isCellClear(c, r)) candidates.push({c, r});
+      }
+    }
+    if (candidates.length === 0) {
+      // Try wider area
+      for (let c = COLS - 6; c <= COLS - 2; c++) {
+        for (let r = 1; r <= 3; r++) {
+          if (isCellClear(c, r)) candidates.push({c, r});
+        }
+      }
+    }
+    if (candidates.length === 0) return false;
+
+    const pos = candidates[Math.floor(Math.random() * candidates.length)];
+    const x = cellX(pos.c), y = cellY(pos.r);
+
+    const spd = 0.8 + level * 0.15;
+    const types = [
+      { color: '#e74c3c', speed: spd, hp: 1, name: 'basic' },
+      { color: '#e67e22', speed: spd * 1.35, hp: 1, name: 'fast' },
+      { color: '#9b59b6', speed: spd * 0.75, hp: level >= 3 ? 2 : 1, name: 'heavy' },
+    ];
+    const t = types[Math.floor(Math.random() * Math.min(3, 1 + Math.floor(level / 2) + (Math.random() > 0.6 ? 1 : 0)))];
+    const e = new Tank(x, y, 2, t.color, t.speed);
+    e.hp = t.hp;
+    e.aiTimer = 0;
+    e.aiChangeInterval = 40 + Math.floor(Math.random() * 80);
+    e.aiShootChance = 0.006 + level * 0.003;
+    e.prevX = x;
+    e.prevY = y;
+    enemies.push(e);
+    enemiesRemaining--;
+    return true;
+  }
+
   function spawnPowerUp() {
-    if (powerUps.length >= 2) return;
-    let x, y, valid;
+    if (powerUps.length >= 3) return;
     for (let attempts = 0; attempts < 20; attempts++) {
       const c = 2 + Math.floor(Math.random() * (COLS - 4));
       const r = 2 + Math.floor(Math.random() * (ROWS - 4));
-      x = cellX(c);
-      y = cellY(r);
-      valid = true;
-      for (const w of walls) {
-        if (dist({x,y}, {x:w.x,y:w.y}) < CELL) { valid = false; break; }
-      }
-      if (valid) {
-        const types = ['speed', 'rapid', 'shield', 'life'];
-        const type = types[Math.floor(Math.random() * types.length)];
-        powerUps.push(new PowerUp(x, y, type));
-        return;
-      }
+      if (!isCellClear(c, r)) continue;
+      const x = cellX(c), y = cellY(r);
+      const types = ['speed', 'rapid', 'shield', 'life'];
+      const type = types[Math.floor(Math.random() * types.length)];
+      powerUps.push(new PowerUp(x, y, type));
+      return;
     }
   }
 
@@ -638,155 +720,185 @@
         player.speed = Math.min(player.speed + 0.4, 3.5);
         break;
       case 'rapid':
-        player.cooldownTime = Math.max(player.cooldownTime - 8, 8);
+        player.cooldownTime = Math.max(player.cooldownTime - 8, 6);
         break;
       case 'shield':
         player.hp = Math.min(player.hp + 1, 3);
         break;
       case 'life':
-        lives++;
+        lives = Math.min(lives + 1, 5);
         break;
     }
   }
 
-  function spawnEnemy() {
-    if (enemiesRemaining <= 0) return;
-    // Spawn at top-right area
-    const spawnCols = [COLS - 4, COLS - 5, COLS - 6];
-    const spawnRows = [1, 2, 3];
-    const c = spawnCols[Math.floor(Math.random() * spawnCols.length)];
-    const r = spawnRows[Math.floor(Math.random() * spawnRows.length)];
-    const x = cellX(c);
-    const y = cellY(r);
-    // Check if spawn is clear
-    for (const e of enemies) {
-      if (dist({x, y}, e) < CELL * 2) return;
-    }
-    if (player && dist({x, y}, player) < CELL * 2) return;
-
-    const enemySpeed = 0.8 + level * 0.15;
-    const enemyHP = level >= 4 ? 2 : 1;
-    const enemyTypes = [
-      { color: '#e74c3c', speed: enemySpeed, name: 'basic' },
-      { color: '#e67e22', speed: enemySpeed * 1.3, name: 'fast' },
-      { color: '#9b59b6', speed: enemySpeed * 0.8, name: 'heavy' },
-    ];
-    const type = enemyTypes[Math.floor(Math.random() * Math.min(3, level + 1))];
-    const enemy = new Tank(x, y, 2, type.color, type.speed);
-    enemy.hp = type.name === 'heavy' ? 2 : enemyHP;
-    enemy.aiTimer = 0;
-    enemy.aiChangeInterval = 60 + Math.floor(Math.random() * 80);
-    enemy.aiShootChance = 0.008 + level * 0.002;
-    enemies.push(enemy);
-    enemiesRemaining--;
-  }
-
+  // ---- AI ----
   function aiUpdate(enemy) {
     if (!enemy.alive) return;
-    enemy.aiTimer++;
 
-    // Change direction periodically
+    // Check if stuck by comparing position to last frame
+    const moved = Math.abs(enemy.x - enemy.prevX) + Math.abs(enemy.y - enemy.prevY);
+    if (moved < 0.3) {
+      enemy.stuckFrames++;
+    } else {
+      enemy.stuckFrames = 0;
+    }
+    enemy.prevX = enemy.x;
+    enemy.prevY = enemy.y;
+
+    // If stuck for too long, change direction
+    if (enemy.stuckFrames > 25) {
+      enemy.dir = (enemy.dir + 1 + Math.floor(Math.random() * 3)) % 4;
+      enemy.stuckFrames = 0;
+      enemy.aiTimer = 0;
+    }
+
+    enemy.aiTimer++;
+    // Periodic direction change
     if (enemy.aiTimer >= enemy.aiChangeInterval) {
       enemy.aiTimer = 0;
       enemy.aiChangeInterval = 40 + Math.floor(Math.random() * 100);
-      enemy.dir = Math.floor(Math.random() * 4);
+      // Sometimes target base or player
+      if (Math.random() < 0.35 && basePos) {
+        const tx = basePos.x, ty = basePos.y;
+        if (Math.abs(tx - enemy.x) > Math.abs(ty - enemy.y)) {
+          enemy.dir = tx > enemy.x ? 1 : 3;
+        } else {
+          enemy.dir = ty > enemy.y ? 2 : 0;
+        }
+      } else if (Math.random() < 0.25 && player && player.alive) {
+        const tx = player.x, ty = player.y;
+        if (Math.abs(tx - enemy.x) > Math.abs(ty - enemy.y)) {
+          enemy.dir = tx > enemy.x ? 1 : 3;
+        } else {
+          enemy.dir = ty > enemy.y ? 2 : 0;
+        }
+      } else {
+        enemy.dir = Math.floor(Math.random() * 4);
+      }
     }
 
     // Move
     let dx = 0, dy = 0;
-    const spd = enemy.speed;
-    if (enemy.dir === 0) dy = -spd;
-    else if (enemy.dir === 1) dx = spd;
-    else if (enemy.dir === 2) dy = spd;
-    else dx = -spd;
+    if (enemy.dir === 0) dy = -enemy.speed;
+    else if (enemy.dir === 1) dx = enemy.speed;
+    else if (enemy.dir === 2) dy = enemy.speed;
+    else dx = -enemy.speed;
     enemy.tryMove(dx, dy);
 
-    // If stuck, change direction
-    if (Math.abs(dx) < 0.01 && Math.abs(dy) < 0.01 && enemy.aiTimer > 5) {
-      enemy.dir = Math.floor(Math.random() * 4);
-      enemy.aiTimer = 0;
-    }
-
-    // Shoot randomly
-    if (Math.random() < enemy.aiShootChance) {
+    // Shoot
+    if (enemy.cooldown <= 0 && Math.random() < enemy.aiShootChance) {
       enemy.shoot();
     }
-
-    // Occasional targeting of player base
-    if (Math.random() < 0.003 && basePos) {
-      const dxb = basePos.x - enemy.x;
-      const dyb = basePos.y - enemy.y;
-      if (Math.abs(dxb) > Math.abs(dyb)) {
-        enemy.dir = dxb > 0 ? 1 : 3;
-      } else {
-        enemy.dir = dyb > 0 ? 2 : 0;
-      }
-    }
+    if (enemy.cooldown > 0) enemy.cooldown--;
   }
 
+  // ---- Game flow ----
   function gameOver(msg) {
+    if (gameState !== STATE.PLAYING) return;
     gameState = STATE.GAMEOVER;
-    gameoverTitle.textContent = msg || '游戏结束';
-    finalScore.textContent = score;
-    gameoverOverlay.classList.remove('hidden');
+    $('gameoverTitle').textContent = msg || '游戏结束';
+    $('finalScore').textContent = score;
+    $('gameoverOverlay').classList.remove('hidden');
     sfxGameOver();
   }
 
   function victory() {
+    if (gameState !== STATE.PLAYING) return;
     gameState = STATE.VICTORY;
-    victoryScore.textContent = score;
-    victoryOverlay.classList.remove('hidden');
+    $('victoryScore').textContent = score;
+    $('victoryOverlay').classList.remove('hidden');
   }
 
   function startGame() {
     initAudio();
     gameState = STATE.PLAYING;
-    score = 0;
-    lives = 3;
-    level = 1;
-    kills = 0;
-    enemies = [];
-    bullets = [];
-    powerUps = [];
-    particles = [];
+    score = 0; lives = 3; level = 1; kills = 0;
+    enemies = []; bullets = []; powerUps = []; particles = [];
     enemySpawnTimer = 0;
+    respawnTimer = 0;
+    playerInvincible = 0;
     totalEnemiesThisLevel = 6 + level * 2;
     enemiesRemaining = totalEnemiesThisLevel;
-    enemySpawnInterval = Math.max(60, 180 - level * 10);
+    enemySpawnInterval = Math.max(50, 160 - level * 10);
 
     generateMap();
     player = new Tank(cellX(2), cellY(2), 1, '#4ecdc4', 1.8);
     player.hp = 1;
     player.cooldownTime = 25;
 
-    menuOverlay.classList.add('hidden');
-    gameoverOverlay.classList.add('hidden');
-    victoryOverlay.classList.add('hidden');
-    pauseOverlay.classList.add('hidden');
-
+    $('menuOverlay').classList.add('hidden');
+    $('gameoverOverlay').classList.add('hidden');
+    $('victoryOverlay').classList.add('hidden');
+    $('pauseOverlay').classList.add('hidden');
     updateHUD();
   }
 
   function nextLevel() {
     level++;
-    enemies = [];
-    bullets = [];
-    powerUps = [];
-    particles = [];
+    enemies = []; bullets = []; powerUps = []; particles = [];
     enemySpawnTimer = 0;
+    respawnTimer = 0;
+    playerInvincible = 0;
     totalEnemiesThisLevel = 6 + level * 2;
     enemiesRemaining = totalEnemiesThisLevel;
-    enemySpawnInterval = Math.max(60, 180 - level * 10);
+    enemySpawnInterval = Math.max(50, 160 - level * 10);
 
     generateMap();
     player.x = cellX(2);
     player.y = cellY(2);
     player.dir = 1;
+    player.alive = true;
+    player.hp = 1;
     player.cooldownTime = Math.max(10, 25 - level);
     player.speed = Math.min(3.5, 1.8 + level * 0.15);
+    player.cooldown = 0;
 
     gameState = STATE.PLAYING;
-    victoryOverlay.classList.add('hidden');
+    $('victoryOverlay').classList.add('hidden');
+    updateHUD();
+  }
+
+  function respawnPlayer() {
+    if (lives <= 0) {
+      gameOver('你被击败了!');
+      return;
+    }
+    // Try to find a clear spawn
+    const spawnPositions = [[2,2], [1,1], [2,1], [1,2],
+                             [2,ROWS-3], [1,ROWS-2], [2,ROWS-2]];
+    for (const [c, r] of spawnPositions) {
+      if (isCellClear(c, r)) {
+        player = new Tank(cellX(c), cellY(r), 1, '#4ecdc4', player ? Math.min(player.speed, 3.5) : 1.8);
+        player.cooldownTime = Math.max(10, 25 - level);
+        player.hp = 1;
+        player.alive = true;
+        playerInvincible = 90; // 1.5 seconds invincibility
+        respawnTimer = 0;
+        updateHUD();
+        return;
+      }
+    }
+    // Fallback: just spawn at (2,2) and push out
+    player = new Tank(cellX(2), cellY(2), 1, '#4ecdc4', 1.8);
+    player.cooldownTime = Math.max(10, 25 - level);
+    player.hp = 1;
+    player.alive = true;
+    playerInvincible = 90;
+    respawnTimer = 0;
+    player.pushOutOfWalls();
+    player.pushOutOfBase();
+    updateHUD();
+  }
+
+  function killPlayer() {
+    player.alive = false;
+    spawnParticles(player.x, player.y, '#ff0000', 20);
+    sfxExplosion();
+    lives--;
+    respawnTimer = 60; // 1 second before respawn
+    if (lives <= 0) {
+      respawnTimer = 60; // Still show brief death before game over
+    }
     updateHUD();
   }
 
@@ -797,22 +909,35 @@
     livesDisplay.textContent = '❤'.repeat(Math.max(0, lives));
   }
 
+  // ---- Main update ----
   function update() {
     if (gameState !== STATE.PLAYING) return;
 
-    // Player movement
-    if (player && player.alive) {
+    // Handle respawn countdown
+    if (respawnTimer > 0) {
+      respawnTimer--;
+      if (respawnTimer <= 0 && lives > 0) {
+        respawnPlayer();
+      } else if (respawnTimer <= 0 && lives <= 0) {
+        gameOver('你被击败了!');
+      }
+    }
+    if (playerInvincible > 0) playerInvincible--;
+
+    // Player movement & shooting
+    if (player && player.alive && respawnTimer <= 0) {
       let dx = 0, dy = 0;
-      if (keys['arrowup'] || keys['w']) dy = -player.speed;
-      if (keys['arrowdown'] || keys['s']) dy = player.speed;
-      if (keys['arrowleft'] || keys['a']) dx = -player.speed;
+      if (keys['arrowup']    || keys['w']) dy = -player.speed;
+      if (keys['arrowdown']  || keys['s']) dy = player.speed;
+      if (keys['arrowleft']  || keys['a']) dx = -player.speed;
       if (keys['arrowright'] || keys['d']) dx = player.speed;
 
       if (dx !== 0 || dy !== 0) {
-        if (Math.abs(dx) > Math.abs(dy) && dx !== 0) {
+        // Prioritize the larger axis for direction
+        if (Math.abs(dx) >= Math.abs(dy)) {
           player.dir = dx > 0 ? 1 : 3;
           dy = 0;
-        } else if (dy !== 0) {
+        } else {
           player.dir = dy > 0 ? 2 : 0;
           dx = 0;
         }
@@ -821,25 +946,23 @@
       if (player.cooldown > 0) player.cooldown--;
     }
 
-    // Update enemies
+    // AI
     for (const e of enemies) {
-      if (e.alive) {
-        aiUpdate(e);
-        if (e.cooldown > 0) e.cooldown--;
-      }
+      if (e.alive) aiUpdate(e);
     }
 
-    // Update bullets
+    // Bullets
     for (const b of bullets) {
       if (b.alive) b.update();
     }
 
-    // Bullet-tank collisions
+    // Bullet vs tanks
     for (const b of bullets) {
       if (!b.alive) continue;
-      for (const e of enemies) {
-        if (!e.alive) continue;
-        if (b.isPlayer && b.alive) {
+      // Player bullets vs enemies
+      if (b.isPlayer) {
+        for (const e of enemies) {
+          if (!e.alive) continue;
           const eb = e.getBounds();
           if (b.x >= eb.left && b.x <= eb.right && b.y >= eb.top && b.y <= eb.bottom) {
             b.alive = false;
@@ -850,17 +973,17 @@
               score += 100;
               spawnParticles(e.x, e.y, e.color, 12);
               sfxExplosion();
-              // Chance to spawn power-up
-              if (Math.random() < 0.25) spawnPowerUp();
+              if (Math.random() < 0.3) spawnPowerUp();
             } else {
               spawnParticles(b.x, b.y, '#fff', 4);
               sfxHit();
             }
+            break; // bullet can only hit one tank
           }
         }
       }
-      // Player bullet hit
-      if (!b.isPlayer && b.alive && player && player.alive) {
+      // Enemy bullets vs player
+      if (!b.isPlayer && b.alive && player && player.alive && respawnTimer <= 0 && playerInvincible <= 0) {
         const pb = player.getBounds();
         if (b.x >= pb.left && b.x <= pb.right && b.y >= pb.top && b.y <= pb.bottom) {
           b.alive = false;
@@ -868,33 +991,20 @@
           spawnParticles(player.x, player.y, '#ff6b6b', 8);
           sfxHit();
           if (player.hp <= 0) {
-            player.alive = false;
-            spawnParticles(player.x, player.y, '#ff0000', 20);
-            sfxExplosion();
-            lives--;
-            if (lives <= 0) {
-              gameOver('你被击败了!');
-            } else {
-              // Respawn
-              setTimeout(() => {
-                if (gameState === STATE.PLAYING) {
-                  player = new Tank(cellX(2), cellY(2), 1, '#4ecdc4', 1.8);
-                  player.cooldownTime = 25;
-                  player.hp = 1;
-                }
-              }, 1000);
-            }
+            killPlayer();
           }
         }
       }
     }
 
-    // Bullet-bullet collisions
+    // Bullet vs bullet
     for (let i = 0; i < bullets.length; i++) {
+      if (!bullets[i].alive) continue;
       for (let j = i + 1; j < bullets.length; j++) {
-        if (bullets[i].alive && bullets[j].alive &&
-            bullets[i].isPlayer !== bullets[j].isPlayer) {
-          if (dist(bullets[i], bullets[j]) < 6) {
+        if (!bullets[j].alive) continue;
+        if (bullets[i].isPlayer !== bullets[j].isPlayer) {
+          if (Math.abs(bullets[i].x - bullets[j].x) < 5 &&
+              Math.abs(bullets[i].y - bullets[j].y) < 5) {
             bullets[i].alive = false;
             bullets[j].alive = false;
             spawnParticles((bullets[i].x + bullets[j].x) / 2, (bullets[i].y + bullets[j].y) / 2, '#fff', 3);
@@ -903,52 +1013,59 @@
       }
     }
 
-    // Tank-tank collisions (enemy vs enemy, player vs enemy)
+    // Enemy vs enemy separation
     for (let i = 0; i < enemies.length; i++) {
+      if (!enemies[i].alive) continue;
       for (let j = i + 1; j < enemies.length; j++) {
-        if (enemies[i].alive && enemies[j].alive && enemies[i].collidesWith(enemies[j])) {
-          enemies[i].tryMove(0, 0); // trigger direction change via ai
-          enemies[j].tryMove(0, 0);
+        if (!enemies[j].alive) continue;
+        if (rectsOverlap(enemies[i].getBounds(), enemies[j].getBounds())) {
+          enemies[i].pushOutOfTanks([enemies[j]]);
+        }
+      }
+    }
+    // Player vs enemy separation
+    if (player && player.alive) {
+      for (const e of enemies) {
+        if (e.alive && rectsOverlap(player.getBounds(), e.getBounds())) {
+          player.pushOutOfTanks([e]);
         }
       }
     }
 
-    // Power-up collection
-    for (let i = powerUps.length - 1; i >= 0; i--) {
-      if (player && player.alive && player.collidesWith(powerUps[i])) {
-        applyPowerUp(powerUps[i]);
-        powerUps.splice(i, 1);
+    // PowerUp pickups
+    if (player && player.alive && respawnTimer <= 0) {
+      for (let i = powerUps.length - 1; i >= 0; i--) {
+        if (rectsOverlap(player.getBounds(), powerUps[i].getBounds())) {
+          applyPowerUp(powerUps[i]);
+          powerUps.splice(i, 1);
+        }
       }
     }
 
-    // Update power-ups
+    // Timed updates
     for (let i = powerUps.length - 1; i >= 0; i--) {
-      if (!powerUps[i].update()) {
-        powerUps.splice(i, 1);
-      }
+      if (!powerUps[i].update()) powerUps.splice(i, 1);
     }
-
-    // Update particles
     for (let i = particles.length - 1; i >= 0; i--) {
       particles[i].update();
       if (particles[i].life <= 0) particles.splice(i, 1);
     }
 
-    // Enemy spawning
+    // Spawn enemies
     enemySpawnTimer++;
     if (enemySpawnTimer >= enemySpawnInterval && enemiesRemaining > 0) {
       enemySpawnTimer = 0;
-      const activeEnemies = enemies.filter(e => e.alive).length;
-      if (activeEnemies < 4) {
+      if (enemies.filter(e => e.alive).length < 5) {
         spawnEnemy();
       }
     }
 
-    // Clean up dead
+    // Clean dead
+    enemies = enemies.filter(e => e.alive || e === player); // keep dead player for reference
     enemies = enemies.filter(e => e.alive);
     bullets = bullets.filter(b => b.alive);
 
-    // Victory check
+    // Victory
     if (enemiesRemaining <= 0 && enemies.length === 0) {
       victory();
     }
@@ -956,8 +1073,9 @@
     updateHUD();
   }
 
+  // ---- Rendering ----
   function drawGrid() {
-    ctx.strokeStyle = 'rgba(255,255,255,0.03)';
+    ctx.strokeStyle = 'rgba(255,255,255,0.02)';
     ctx.lineWidth = 0.5;
     for (let c = 0; c <= COLS; c++) {
       ctx.beginPath();
@@ -975,59 +1093,60 @@
 
   function drawBase() {
     if (!basePos) return;
-    // Base flag
+    // Base
     ctx.fillStyle = '#2ecc71';
-    ctx.fillRect(basePos.x - CELL / 2 + 2, basePos.y - CELL / 2 + 2, CELL - 4, CELL - 4);
+    ctx.fillRect(basePos.x - CELL/2 + 2, basePos.y - CELL/2 + 2, CELL - 4, CELL - 4);
     ctx.fillStyle = '#27ae60';
     ctx.beginPath();
-    ctx.arc(basePos.x, basePos.y, CELL * 0.3, 0, Math.PI * 2);
+    ctx.arc(basePos.x, basePos.y, CELL * 0.28, 0, Math.PI * 2);
     ctx.fill();
     // Flag
-    ctx.fillStyle = '#fff';
-    ctx.fillRect(basePos.x + 1, basePos.y - CELL / 3, 2, CELL * 0.5);
+    ctx.fillStyle = '#eee';
+    ctx.fillRect(basePos.x + 1, basePos.y - CELL/3, 2, CELL * 0.42);
     ctx.fillStyle = '#e74c3c';
     ctx.beginPath();
-    ctx.moveTo(basePos.x + 3, basePos.y - CELL / 3);
-    ctx.lineTo(basePos.x + 12, basePos.y - CELL / 3 + 5);
-    ctx.lineTo(basePos.x + 3, basePos.y - CELL / 3 + 10);
+    ctx.moveTo(basePos.x + 3, basePos.y - CELL/3);
+    ctx.lineTo(basePos.x + 12, basePos.y - CELL/3 + 5);
+    ctx.lineTo(basePos.x + 3, basePos.y - CELL/3 + 10);
     ctx.fill();
   }
 
   function render() {
     ctx.clearRect(0, 0, canvas.width, canvas.height);
     drawGrid();
-
-    // Draw base
     drawBase();
-
-    // Draw walls
     for (const w of walls) w.draw(ctx);
-
-    // Draw power-ups
     for (const pu of powerUps) pu.draw(ctx);
-
-    // Draw enemies
     for (const e of enemies) {
       if (e.alive) e.draw(ctx);
     }
 
-    // Draw player
-    if (player && player.alive) player.draw(ctx);
+    // Player with invincibility blink
+    if (player && player.alive && respawnTimer <= 0) {
+      if (playerInvincible > 0 && Math.floor(playerInvincible / 4) % 2 === 0) {
+        // Skip drawing to blink
+      } else {
+        player.draw(ctx);
+      }
+    }
 
-    // Draw bullets
     for (const b of bullets) {
       if (b.alive) b.draw(ctx);
     }
-
-    // Draw particles
     for (const p of particles) p.draw(ctx);
 
-    // Enemy spawn indicator
-    if (enemiesRemaining > 0) {
-      ctx.fillStyle = 'rgba(255,255,255,0.5)';
+    // HUD above canvas
+    if (gameState === STATE.PLAYING) {
+      ctx.fillStyle = 'rgba(255,255,255,0.45)';
       ctx.font = '10px monospace';
       ctx.textAlign = 'right';
-      ctx.fillText(`剩余敌人: ${enemiesRemaining}`, canvas.width - 10, 16);
+      ctx.fillText(`剩余敌人: ${enemiesRemaining}`, canvas.width - 8, 14);
+      if (respawnTimer > 0) {
+        ctx.fillStyle = '#ff6b6b';
+        ctx.font = 'bold 16px monospace';
+        ctx.textAlign = 'center';
+        ctx.fillText(`重生中... ${Math.ceil(respawnTimer / 60)}`, canvas.width / 2, canvas.height / 2 + 40);
+      }
     }
   }
 
@@ -1038,9 +1157,9 @@
   }
 
   // Button handlers
-  document.getElementById('startBtn').addEventListener('click', startGame);
-  document.getElementById('restartBtn').addEventListener('click', startGame);
-  document.getElementById('nextLevelBtn').addEventListener('click', nextLevel);
+  $('startBtn').addEventListener('click', startGame);
+  $('restartBtn').addEventListener('click', startGame);
+  $('nextLevelBtn').addEventListener('click', nextLevel);
 
   // Initial render
   render();
